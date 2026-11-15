@@ -77,15 +77,26 @@ private:
         return (at(Kind::Int) || at(Kind::Void)) && nextIs(Kind::Ident) &&
                peek(2).kind == Kind::LParen;
     }
-    bool startsStatement() const {
+    bool startsAssignment() const { return at(Kind::Ident) && nextIs(Kind::Assign); }
+
+    bool startsExpression() const {
         switch (peek().kind) {
-        case Kind::LBrace: case Kind::Semicolon: case Kind::Const: case Kind::Int:
-        case Kind::If: case Kind::While: case Kind::Break: case Kind::Continue:
-        case Kind::Return: case Kind::Ident: case Kind::Integer: case Kind::LParen:
+        case Kind::Ident: case Kind::Integer: case Kind::LParen:
         case Kind::Plus: case Kind::Minus: case Kind::Bang:
             return true;
         default:
             return false;
+        }
+    }
+
+    bool startsStatement() const {
+        switch (peek().kind) {
+        case Kind::LBrace: case Kind::Semicolon: case Kind::Const: case Kind::Int:
+        case Kind::If: case Kind::While: case Kind::Break: case Kind::Continue:
+        case Kind::Return:
+            return true;
+        default:
+            return startsExpression();
         }
     }
 
@@ -155,7 +166,7 @@ private:
             expect(Kind::Semicolon, "expected ';'");
             return stmt(first, Return{std::move(value)});
         }
-        if (at(Kind::Ident) && nextIs(Kind::Assign)) {
+        if (startsAssignment()) {
             const Token name = take();
             take(); // '='
             auto value = parseOr();
@@ -181,9 +192,20 @@ private:
     }
 
     StmtPtr parseControl(Token first) {
-        expect(Kind::LParen, "expected '('");
-        auto condition = parseOr();
-        const bool closed = expect(Kind::RParen, "expected ')'");
+        ExprPtr condition;
+        bool closed = false;
+        const bool opened = match(Kind::LParen);
+        const bool bodyWithoutCondition = !opened && startsStatement() &&
+                                           (!startsExpression() || startsAssignment());
+        if (bodyWithoutCondition) {
+            // The next tokens can start a body, but cannot be a condition.
+            // Leave them for parseStatement instead of inventing a second error.
+            report("expected a parenthesized condition");
+        } else {
+            if (!opened) report("expected '('");
+            condition = parseOr();
+            closed = expect(Kind::RParen, "expected ')'");
+        }
         StmtPtr body;
         if (!closed && !startsStatement()) {
             // Already diagnosed a broken header; skip its malformed tail.
