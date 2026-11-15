@@ -1,0 +1,104 @@
+# ToyC 编译器 · 词法、语法与语义分析
+
+武汉大学编译系统实践小组项目。当前阶段交付**第一题 `-token` 和第二题 `-ast`**：同一个 C++17 可执行文件读标准输入，由参数选择输出。第三题的 RISC-V64 汇编和优化留到下一阶段。编译器只依赖 C++ 标准库，构建用 CMake，无需 Flex、Bison、LLVM 或 Koopa。
+
+## 构建与运行
+
+在 Linux / WSL 的项目根目录执行（CMake ≥ 3.16、支持 C++17 的编译器）：
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+./build/compiler -token < input.c
+./build/compiler -ast < input.c
+```
+
+最小输入可以用 `printf 'int main() { return 0; }\n'` 生成；管道接 `./build/compiler -ast` 会输出 `accept`。
+
+| 模式 | 标准输出 | 含诊断时的行为 |
+| --- | --- | --- |
+| `-token` | `<序号>:<类型>:"<原文>"`，从 0 编号，一行一个 token；关键字、运算符及界符的大类名用单引号包围，标识符用 `Ident`，整数用 `IntConst` | `reject`、每个词法错误的行号和原因、一个空行、继续扫描得到的完整 token 流 |
+| `-ast` | 成功只输出 `accept`；AST 保留在程序内部 | `reject` 后每行给一个 0-based 错误位置，可带原因；语法诊断保留同一行的多个错误，语义诊断按课程指南每行保留一条 |
+
+两种模式都用标准输出给评测结果，`accept` 和 `reject` 都表示编译器正常运行，退出码为 `0`。只有命令行参数错误时才输出用法到 stderr 并返回 `2`。源代码第一行编号为 `0`。
+
+## 模块与数据流
+
+```text
+stdin → Lexer → Token + 位置 ──────────────────────→ -token 格式化
+                    │
+                    └→ Parser → AST → Semantic ──→ -ast 诊断格式化
+```
+
+| 文件 | 职责 |
+| --- | --- |
+| `src/main.cpp` | CLI、标准输入、阶段调度和输出格式。词法失败时报告词法诊断，语法失败时不把残缺 AST 交给语义检查。 |
+| `src/token.hpp` | token 种类、原文切片、源位置、诊断。源文本由 `main` 持有，生命周期覆盖 token 和 AST。 |
+| `src/lexer.hpp` / `src/lexer.cpp` | 手写扫描器。`lex` 生成 token 序列和词法诊断，内部用 `End` 表示文件结束。 |
+| `src/ast.hpp` | 定义函数、语句和表达式。每类节点只持有自己的数据，父节点通过 `unique_ptr` 拥有子节点，位置用于定位诊断。 |
+| `src/parser.hpp` / `src/parser.cpp` | 递归下降。`parse` 按 ToyC 文法建立 AST，同时尽量恢复并收集多个语法错误。 |
+| `src/semantic.hpp` / `src/semantic.cpp` | `checkSemantics` 按源码顺序检查作用域、名称、类型及控制流。 |
+| `tools/check_frontend.py` | 本地验收工具，直接读取课程样例 ZIP，比对公开期望输出。C++ 构建和希冀运行不依赖 Python。 |
+| `CMakeLists.txt` | 配置 `compiler` 单一目标及编译警告。 |
+
+## 词法分析
+
+扫描器从左到右识别空白、注释、标识符、整数和符号。整段读取标识符后再查关键字表，所以 `int` 是关键字，`integer` 是标识符；符号先尝试两个字符，所以 `<=` 不会被拆成 `<` 和 `=`。`//` 与 `/* ... */` 在识别 `/` 前处理。未闭合的块注释报在注释起始行；注释内部字符不单独报错。
+
+数字扫描遵循课程 ZIP 中的可执行验收口径：`l11`、`l18` 将 `-` 单独作为运算符，`l04` 将 `000000` 作为一个 `IntConst` 保留原文。因此扫描连续十进制数字，语法层再区分一元负号和二元减法。没有 SysY 的八进制或十六进制常量。非法字符不进入 token 流；有效 UTF-8 非 ASCII 字符按一个字符报错，无效 UTF-8 逐字节跳过。CRLF 算一个换行。
+
+## 语法分析与恢复
+
+文件只能包含一个或多个函数定义。`parseStatement` 按开头 token 选择块、声明、分支、循环等形式；用两个 token 前瞻区分 `Ident '='` 赋值和以 `Ident` 开始的表达式。`else` 归入最近的未匹配 `if`。
+
+表达式从低到高依次是 `||`、`&&`、关系与相等（同一级）、加减、乘除取模、一元运算、基本表达式。以加减为例，将左递归规则改成一个必选项和零个或多个后缀：
+
+```text
+改写前：AddExpr → AddExpr ('+' | '-') MulExpr | MulExpr
+改写后：AddExpr → MulExpr { ('+' | '-') MulExpr }
+```
+
+其他二元层用同样的改写。遇到每个后缀就把已有左树和新右项组成父节点，`a-b-c` 因此是 `(a-b)-c`。一元运算仍递归解析其操作数，`-!x` 是 `-(!x)`。
+
+缺少分号、右括号或右花括号时，可记录当前位置并把缺失符号视为插入，保留后续 token；无法继续解析当前语句时，跳到分号、块边界或下一条明显的语句。看到下一个函数头却未见 `}` 时，报告前一函数缺失右花括号，继续解析后一个函数。恢复必须推进输入或退出当前层，避免卡在一个错误处。
+
+## 语义分析
+
+- **程序与函数：** 要求存在 `int main()`；函数名全局唯一。先登记当前签名再检查其函数体，允许自递归，并拒绝调用尚未声明的后续函数。预置 `int getint()` 和 `void putint(int)`，二者在词法和语法层仍是普通标识符。
+- **作用域：** 函数参数和函数体最外层局部变量共享一层作用域；嵌套块新增一层，查找从内向外。同一层不能重名，内层可遮蔽外层。普通 `int` 可省略初值，省略时没有默认值；当前未做一般的确定赋值数据流分析。`const int` 必须有初值，初始化可调用函数，之后不能赋值。
+- **值与调用：** 验证实参数量及类型；函数名不能直接当整数用，变量不能当函数调用。`void` 调用可独立成语句，不能用于算术、条件或需要 `int` 的位置。非法子表达式有专门的错误类型，减少连锁诊断。
+- **控制流：** 跟踪是否可顺序执行到下一条语句、`return`、`break` 或 `continue`；循环消化属于它的 `break` 与 `continue`。检查 `int` 函数的结束大括号是否可达，支持常量条件及双分支返回；`void` 函数可以自然结束。
+- **常量信息：** 检查 32 位有符号整数文字，包括 `-2147483648`，并对可安全求值的表达式计算常量。该信息用于识别确定的除零及控制流分支。逻辑运算仍检查两侧类型，但不会将短路跳过的右侧当作实际求值。
+
+## 本地验收
+
+使用老师发的 `cases20261110.zip`（本机位于 `task_target/`，课程附件不纳入远端代码仓库）。无需解压，也不修改任何 `.c`、`.token` 或 `.check-ast`：
+
+```sh
+python3 tools/check_frontend.py ./build/compiler task_target/cases20261110.zip
+```
+
+脚本对 `-token` 比对 token 原文、类型、编号及词法错误行号；对 `-ast` 比对结论和诊断行号。两者都保持行号顺序和重复次数，忽略题目明确不计分的诊断文字，同时检查进程退出码、stderr 和超时。
+
+| 验收项 | 本地结果（WSL Ubuntu，GCC 13.3.0，CMake 3.28.3） |
+| --- | --- |
+| 词法 | 30 / 30 |
+| 语法与语义 | 25 / 25：12 组通过、8 组语法错误、5 组语义错误 |
+
+样例包 SHA256：`1c2b62f5669ca6afebdff16fa03c72bb06c1af1125d34c3827df2e20aa5d9ea3`。这两组结果只证明公开样例通过；实际分数以希冀的提交记录及排行榜为准。
+
+## 希冀提交与评分
+
+1. 将验证通过的提交推到小组 Git 仓库。记录 commit 和分支，保证希冀克隆的是同一个版本。
+2. 打开[第一题：词法分析](https://cslabcg.whu.edu.cn/assignment/programOJPList_ce.jsp?assignID=6336&proNum=1&libCenter=false)和[第二题：语法与语义分析](https://cslabcg.whu.edu.cn/assignment/programOJPList_ce.jsp?assignID=6336&proNum=2&libCenter=false)，分别提交同一分支。按[课程提交指南](https://github.com/lightsmilew/compiler-principles/blob/main/docs/guide/submission.md)填克隆地址、仓库读取令牌及可选分支。访问令牌只在希冀表单中填写。
+3. 等待两个评测完成，核对各自提交记录和榜单，并记录版本、提交编号、分数。若有失败，先区分克隆、编译、运行和输出差异，再修复重测。
+
+**第一题**看正常／拒绝输出、非法字符的 0-based 行号序列和恢复后完整 token 流；**第二题**看 `accept`／`reject` 和 0-based 错误行号序列。题面未注明这两题隐藏用例的数量或具体权重，公开样例通过数不能换算为榜单得分。
+
+本地任务介绍给出课程总评：在线评测 **50%**、实践报告 **20%**、答辩 **30%**（阶段、最终答辩各 15%）。本地题面还写明第三题为 20 组功能用例、10 个性能程序，与 GCC `-O2` 性能基准比较；样例包的 `codegen/performance/README.md` 细化为每个性能程序三档输入、共 30 组执行，第三题功能／性能为 85%／15%。[在线评分指南](https://github.com/lightsmilew/compiler-principles/blob/main/docs/guide/grading.md)对性能分汇总的写法和样例包不同，也称前端不单独计入其所述评分方案。当前以本学期的三道原题和平台结果为准；两题榜单满分不等于课程总评满分。
+
+## 小组协作
+
+词法组维护 token、位置和原文协议；语法组维护文法、AST 和错误恢复；语义组维护作用域、类型和控制流；集成与验收负责构建、输出协议和平台记录。修改公共接口时先说明调用方和需重跑的样例。遇到题面差异，在 README 记录所依据的题面或样例，避免各模块各自猜测。
+
+参考：[武大 ToyC 文档](https://github.com/lightsmilew/compiler-principles)用于语言与判定细节；[北大编译实践](https://pku-minic.github.io/online-doc/)用于编译阶段和 AST 组织；[LLVM Kaleidoscope 前端](https://llvm.org/docs/tutorial/MyFirstLanguageFrontend/LangImpl02.html)用于手写 C++ 解析器的组织思路。

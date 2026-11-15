@@ -1,0 +1,6 @@
+/build*/
+/compiler
+/compiler.exe
+/CMakeUserPresets.json
+/task_target/
+__pycache__/
