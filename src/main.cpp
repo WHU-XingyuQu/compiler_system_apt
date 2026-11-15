@@ -9,16 +9,18 @@
 
 namespace {
 
-void printDiagnostics(const std::vector<toyc::Diagnostic>& errors) {
+void printDiagnostics(const std::vector<toyc::Diagnostic>& errors, bool includeReason) {
     std::cout << "reject\n";
     for (const auto& error : errors) {
-        std::cout << error.pos.line << ' ' << error.message << '\n';
+        std::cout << error.pos.line;
+        if (includeReason) std::cout << ' ' << error.message;
+        std::cout << '\n';
     }
 }
 
 void printTokens(const toyc::LexResult& lexed) {
     if (!lexed.diagnostics.empty()) {
-        printDiagnostics(lexed.diagnostics);
+        printDiagnostics(lexed.diagnostics, true);
         std::cout << '\n';
     }
     for (std::size_t i = 0; lexed.tokens[i].kind != toyc::Kind::End; ++i) {
@@ -33,7 +35,7 @@ void printTokens(const toyc::LexResult& lexed) {
 
 void checkProgram(const toyc::LexResult& lexed) {
     if (!lexed.diagnostics.empty()) {
-        printDiagnostics(lexed.diagnostics);
+        printDiagnostics(lexed.diagnostics, false);
         return;
     }
     const auto parsed = toyc::parse(lexed.tokens);
@@ -52,7 +54,7 @@ void checkProgram(const toyc::LexResult& lexed) {
             return a.pos.line == b.pos.line;
         }), errors.end());
     }
-    printDiagnostics(errors);
+    printDiagnostics(errors, false);
 }
 
 } // namespace
