@@ -93,9 +93,18 @@ python3 tools/check_frontend.py ./build/compiler task_target/cases20261110.zip
 2. 打开[第一题：词法分析](https://cslabcg.whu.edu.cn/assignment/programOJPList_ce.jsp?assignID=6336&proNum=1&libCenter=false)和[第二题：语法与语义分析](https://cslabcg.whu.edu.cn/assignment/programOJPList_ce.jsp?assignID=6336&proNum=2&libCenter=false)，分别提交同一分支。按[课程提交指南](https://github.com/lightsmilew/compiler-principles/blob/main/docs/guide/submission.md)填克隆地址、仓库读取令牌及可选分支。访问令牌只在希冀表单中填写。
 3. 等待两个评测完成，核对各自提交记录和榜单，并记录版本、提交编号、分数。若有失败，先区分克隆、编译、运行和输出差异，再修复重测。
 
-**第一题**看正常／拒绝输出、非法字符的 0-based 行号序列和恢复后完整 token 流；**第二题**看 `accept`／`reject` 和 0-based 错误行号序列。题面未注明这两题隐藏用例的数量或具体权重，公开样例通过数不能换算为榜单得分。
+**第一题**比较非法字符的 0-based 行号序列和恢复后的完整 token 流；希冀实际结果表列出 30 个等权测试点，每项显示 3.33 分，全部通过为 100 分。**第二题**比较 `accept`／`reject` 和 0-based 错误行号序列；结果表列出 25 个等权测试点，每项 4 分。`tools/check_frontend.py` 只比对课程 ZIP 的期望输出，实际得分以希冀为准。
 
 本地任务介绍给出课程总评：在线评测 **50%**、实践报告 **20%**、答辩 **30%**（阶段、最终答辩各 15%）。本地题面还写明第三题为 20 组功能用例、10 个性能程序，与 GCC `-O2` 性能基准比较；样例包的 `codegen/performance/README.md` 细化为每个性能程序三档输入、共 30 组执行，第三题功能／性能为 85%／15%。[在线评分指南](https://github.com/lightsmilew/compiler-principles/blob/main/docs/guide/grading.md)对性能分汇总的写法和样例包不同，也称前端不单独计入其所述评分方案。当前以本学期的三道原题和平台结果为准；两题榜单满分不等于课程总评满分。
+
+### 已确认的评测记录（2026-11-15）
+
+| 题目 | 提交版本 | 希冀结果 |
+| --- | --- | --- |
+| 词法分析 | `8a3b43f` | 08:52:54 提交，30/30，通过，排行榜 100 分 |
+| 语法与语义分析 | `8a3b43f` | 08:51:11 提交，24/25，96 分。仅 `s05_while_without_condition` 为“错误输出” |
+
+原 ZIP 对 `s05_while_without_condition` 的期望是 `reject` 后分别输出两行 `2`，该版本本地符合这个期望。希冀仅显示失败测试点，没有显示该点期望输出。若出现 `Git Clone 时发生错误`，本次没有运行测试，应先恢复仓库访问，再判断实现有没有问题。
 
 ## 小组协作
 
